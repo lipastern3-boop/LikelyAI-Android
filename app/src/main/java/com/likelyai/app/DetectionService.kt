@@ -12,7 +12,9 @@ import com.likelyai.app.model.DetectionRecord
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class DetectionService : Service() {
@@ -22,28 +24,30 @@ class DetectionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        createChannel()
+        createNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = buildNotification()
+        val notification = buildForegroundNotification()
         startForeground(1001, notification)
 
         scope.launch {
-            while (true) {
-                val textSample = "This generative image looks highly polished and synthetic."
-                val score = engine.scoreText(textSample)
+            while (isActive) {
+                val score = engine.scoreText(
+                    "This image looks polished, highly synthetic, and likely AI-generated."
+                )
 
-                if (score > 0.7f) {
+                if (score >= 0.65f) {
                     val record = DetectionRecord(
                         label = "Likely AI",
                         type = "text",
                         confidence = score,
-                        message = "AI-generated text likely detected."
+                        message = "AI-generated content likely detected."
                     )
-                    DetectionStore().add(record)
-                    showNotification(record)
-                    startService(Intent(this@DetectionService, OverlayService::class.java))
+
+                    DetectionStore.add(record)
+                    triggerOverlay()
+                    showAlertNotification(record)
                 }
 
                 delay(15000L)
@@ -55,12 +59,18 @@ class DetectionService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
+        stopService(Intent(this, OverlayService::class.java))
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun buildNotification(): Notification {
+    private fun triggerOverlay() {
+        val overlayIntent = Intent(this, OverlayService::class.java)
+        startService(overlayIntent)
+    }
+
+    private fun buildForegroundNotification(): Notification {
         return NotificationCompat.Builder(this, "likelyai_channel")
             .setContentTitle("LikelyAI")
             .setContentText("Monitoring for likely AI-generated content")
@@ -69,7 +79,7 @@ class DetectionService : Service() {
             .build()
     }
 
-    private fun createChannel() {
+    private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 "likelyai_channel",
@@ -81,11 +91,11 @@ class DetectionService : Service() {
         }
     }
 
-    private fun showNotification(record: DetectionRecord) {
+    private fun showAlertNotification(record: DetectionRecord) {
         val manager = getSystemService(NotificationManager::class.java)
         val notification = NotificationCompat.Builder(this, "likelyai_channel")
             .setContentTitle("Likely AI detected")
-            .setContentText("${record.label} (${(record.confidence * 100).toInt()}%)")
+            .setContentText("${record.label} · ${(record.confidence * 100).toInt()}% confidence")
             .setSmallIcon(android.R.drawable.stat_notify_error)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
